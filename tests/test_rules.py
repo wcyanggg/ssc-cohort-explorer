@@ -2,6 +2,7 @@
 
 Run:  .venv/bin/python -m pytest tests -q
 """
+import json
 import sys
 from pathlib import Path
 
@@ -12,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from ssc_coh import clean                            # noqa: E402
-from ssc_coh.stats import association_test, prevalence_summary   # noqa: E402
+from ssc_coh.stats import (association_test, prevalence_by_group,   # noqa: E402
+                           prevalence_summary)
 
 
 @pytest.fixture(autouse=True)
@@ -66,11 +68,113 @@ def test_prevalence_of_the_cohort_matches_the_rates_reported_in_the_app():
     assert round(summary.upper_bound * 100, 1) == 79.3
 
 
+# ----------------------------------------------- per-group bounds and their overlap
+# the three comparisons the report and the app quote, as (lower bound, upper bound) in percent
+ILD_BOUNDS_BY_GROUP = {
+    "Scl-70 positive": (64.7, 87.7),
+    "Scl-70 negative": (32.3, 75.8),
+    "anti-centromere positive": (18.1, 69.3),
+    "anti-centromere negative": (50.4, 82.3),
+    "dcSSc": (63.2, 89.8),
+    "lcSSc": (28.3, 72.3),
+}
+ILD_COMPARISONS = [("Scl-70 positive", "Scl-70 negative"),
+                   ("anti-centromere positive", "anti-centromere negative"),
+                   ("dcSSc", "lcSSc")]
+
+
+def ild_bounds_by_group() -> dict[str, tuple[float, float]]:
+    """The ILD lower and upper bound of each group, in percent, from the committed features."""
+    features = pd.read_parquet(ROOT / "data" / "processed" / "features.parquet")
+    group_masks = {
+        "Scl-70 positive": features["ab_scl70"].eq("positive"),
+        "Scl-70 negative": features["ab_scl70"].eq("negative"),
+        "anti-centromere positive": features["ab_aca"].eq("positive"),
+        "anti-centromere negative": features["ab_aca"].eq("negative"),
+        "dcSSc": features["ssc_subtype"].eq("dcSSc"),
+        "lcSSc": features["ssc_subtype"].eq("lcSSc"),
+    }
+    bounds = {}
+    for group_name, group_mask in group_masks.items():
+        summary = prevalence_summary(features.loc[group_mask, "dx_ild"])
+        bounds[group_name] = (round(summary.lower_bound * 100, 1),
+                              round(summary.upper_bound * 100, 1))
+    return bounds
+
+
+def test_each_group_carries_the_ild_bounds_the_report_quotes():
+    assert ild_bounds_by_group() == ILD_BOUNDS_BY_GROUP
+
+
+def test_the_ild_bounds_of_the_two_groups_overlap_in_every_comparison():
+    bounds = ild_bounds_by_group()
+    for first_group, second_group in ILD_COMPARISONS:
+        first_low, first_high = bounds[first_group]
+        second_low, second_high = bounds[second_group]
+        assert first_low <= second_high and second_low <= first_high, (
+            f"{first_group} and {second_group} no longer overlap")
+
+
+def test_the_ild_bounds_leave_room_for_the_ordering_to_reverse():
+    """Overlapping bounds mean an assignment exists that flips the complete-case ordering.
+
+    The group with the higher complete-case rate can be pushed to its lower bound while the
+    other is pushed to its upper bound, so no claim that the direction is robust to
+    differential missingness can be made from these bounds.
+    """
+    bounds = ild_bounds_by_group()
+    for higher_group, lower_group in [("Scl-70 positive", "Scl-70 negative"),
+                                      ("anti-centromere negative", "anti-centromere positive"),
+                                      ("dcSSc", "lcSSc")]:
+        assert bounds[higher_group][0] < bounds[lower_group][1], (
+            f"{higher_group} can no longer fall below {lower_group}")
+
+
+def test_opposite_assignments_in_the_two_groups_reverse_the_complete_case_ordering():
+    # group_high: 6 of 8 recorded positive (75.0%) with 12 unrecorded
+    # group_low: 5 of 10 recorded positive (50.0%) with 2 unrecorded
+    frame = pd.DataFrame({
+        "group": ["group_high"] * 20 + ["group_low"] * 12,
+        "outcome": pd.array([True] * 6 + [False] * 2 + [pd.NA] * 12
+                            + [True] * 5 + [False] * 5 + [pd.NA] * 2, dtype="boolean"),
+    })
+    by_group = prevalence_by_group(frame, "group", "outcome").set_index("group")
+    assert by_group.loc["group_high", "complete_case_rate"] == 0.75
+    assert by_group.loc["group_low", "complete_case_rate"] == 0.5
+    # read group_high's unrecorded rows as negatives and group_low's as positives
+    assert by_group.loc["group_high", "lower_bound"] == 0.3
+    assert by_group.loc["group_low", "upper_bound"] == 7 / 12
+    assert by_group.loc["group_high", "lower_bound"] < by_group.loc["group_low", "upper_bound"]
+
+
+def test_prevalence_by_group_keeps_every_group_on_its_own_denominator():
+    # group_sparse is unrecorded for 6 of 10; group_complete is recorded for all 10
+    frame = pd.DataFrame({
+        "group": ["group_sparse"] * 10 + ["group_complete"] * 10,
+        "outcome": pd.array([True] * 2 + [False] * 2 + [pd.NA] * 6
+                            + [True] * 5 + [False] * 5, dtype="boolean"),
+    })
+    by_group = prevalence_by_group(frame, "group", "outcome").set_index("group")
+    cohort = prevalence_summary(frame["outcome"])
+    assert (by_group.loc["group_sparse", "lower_bound"],
+            by_group.loc["group_sparse", "upper_bound"]) == (0.2, 0.8)
+    # a group with nothing unrecorded has no width at all, which cohort bounds would hide
+    assert (by_group.loc["group_complete", "lower_bound"],
+            by_group.loc["group_complete", "upper_bound"]) == (0.5, 0.5)
+    assert (cohort.lower_bound, cohort.upper_bound) == (0.35, 0.65)
+    for group_name in ["group_sparse", "group_complete"]:
+        assert (by_group.loc[group_name, "lower_bound"],
+                by_group.loc[group_name, "upper_bound"]) != (cohort.lower_bound,
+                                                             cohort.upper_bound)
+
+
 # ------------------------------------------------------- association test gate
 def test_association_test_uses_chi_square_when_every_expected_count_is_large():
     result = association_test(pd.DataFrame([[50, 50], [40, 60]]))
     assert result.test_name == "chi-square"
     assert result.smallest_expected_count >= 5
+    assert result.statistic_name == "chi-square"
+    assert result.statistic > 0
 
 
 def test_association_test_falls_back_to_fisher_when_an_expected_count_is_small():
@@ -78,6 +182,8 @@ def test_association_test_falls_back_to_fisher_when_an_expected_count_is_small()
     result = association_test(pd.DataFrame([[1, 1], [1, 20]]))
     assert result.test_name == "Fisher's exact"
     assert result.smallest_expected_count < 5
+    assert result.statistic_name == "odds ratio"
+    assert result.statistic > 0
     assert 0 <= result.p_value <= 1
 
 
@@ -91,6 +197,15 @@ def test_association_test_needs_two_groups_and_two_outcome_values():
     result = association_test(pd.DataFrame([[5, 5]]))
     assert result.test_name == "none"
     assert "only one group" in result.reason
+
+
+def test_the_notebook_uses_the_shared_association_test():
+    """One association gate, not two: the notebook calls into ssc_coh.stats like the app."""
+    notebook = json.loads((ROOT / "notebooks" / "01_disease_patterns.ipynb").read_text())
+    notebook_code = "\n".join("".join(cell["source"]) for cell in notebook["cells"]
+                              if cell["cell_type"] == "code")
+    assert "from ssc_coh.stats import association_test" in notebook_code
+    assert "chi2_contingency" not in notebook_code
 
 
 # ------------------------------------------------------------ onset order flag

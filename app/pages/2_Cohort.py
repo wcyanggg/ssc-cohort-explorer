@@ -71,8 +71,7 @@ with p1:
     aca_rate = ab[ab["antibody"] == "anti-centromere"].set_index("subtype")["positive"]
     aca_title = "Antibody positivity by subtype"
     if {"lcSSc", "dcSSc"}.issubset(aca_rate.index) and aca_rate["dcSSc"] > 0:
-        aca_title += (" (ACA positivity is "
-                      f"{aca_rate['lcSSc'] / aca_rate['dcSSc']:.0f}× as common in limited disease)")
+        aca_title += f" (ACA {aca_rate['lcSSc'] / aca_rate['dcSSc']:.0f}× as common in limited)"
     fig = px.bar(ab, x="antibody", y="positive", color="subtype",
                  barmode="group", color_discrete_map=SUBTYPE_COLORS)
     fig.update_layout(height=320, margin=dict(l=10, r=10, t=30, b=10),
@@ -126,7 +125,10 @@ with p3:
                "patients whose field was filled in. The two bounds read every "
                "empty field first as no ILD and then as ILD, so the distance "
                "between them is how far the missing field alone can move the "
-               "rate. It is a sensitivity range, not a confidence interval.")
+               "rate. It is a sensitivity range, not a confidence interval. The "
+               "groups are unrecorded at different rates and their bounds overlap, "
+               "so the ordering of the complete-case estimates is not robust to "
+               "differential missingness.")
 with p4:
     lung = selected.melt(id_vars="ssc_subtype", value_vars=["fvc", "dlco_sb"],
                          var_name="measure", value_name="pct").dropna()

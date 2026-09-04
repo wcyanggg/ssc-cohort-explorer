@@ -281,13 +281,20 @@ patients have a skin score at all, across 3,110 visits.
 Recorded ILD moves with all three groupings. Among patients whose comorbidity field was recorded,
 ILD is noted for 84.0% of Scl-70 positive patients against 57.2% of Scl-70 negative, for 37.1% of
 anti-centromere positive against 74.0% of anti-centromere negative, and for 86.1% of diffuse
-against 50.6% of limited. The bounds are wide and the ordering survives both of them. Reading every
-empty field as no ILD gives 64.7% against 32.3% by Scl-70, 18.1% against 50.4% by
-anti-centromere, 63.2% against 28.3% by subtype; reading every empty field as ILD gives 87.7%
-against 75.8%, 69.3% against 82.3%, and 89.8% against 72.3%. The chi-square is decisive under
-either denominator that can be tested. An empty field can mean there was nothing to record or
-that nobody recorded it, and no analysis here picks between the two. Lung function agrees: latest FVC median 78.5
-in diffuse against 88.0 in limited, a gap of 9.5 points, and DLCO 74.0 against 77.9.
+against 50.6% of limited. Reading every empty field as no ILD gives 64.7% against 32.3% by Scl-70,
+18.1% against 50.4% by anti-centromere, 63.2% against 28.3% by subtype; reading every empty field
+as ILD gives 87.7% against 75.8%, 69.3% against 82.3%, and 89.8% against 72.3%. Under those two
+cohort-wide extreme assignments the ordering of the point estimates is unchanged. The
+group-specific bounds overlap, however, so the direction is not robust to differential missingness
+and these bounds cannot rule out a reversal: 64.7% for Scl-70 positive sits below 75.8% for Scl-70
+negative, 69.3% for anti-centromere positive above 50.4% for negative, and 63.2% for diffuse below
+72.3% for limited, and every one of those pairs is inside the bounds. The groups are missing the
+field at different rates, from 23.0% of Scl-70 positive patients to 51.2% of anti-centromere
+positive, which is what makes a differential assignment possible. The chi-square is computed on the
+recorded cases and is the inferential result; the bounds are a descriptive sensitivity analysis and
+carry no test. An empty field can mean there was nothing to record or that nobody recorded it, and
+no analysis here picks between the two. Lung function agrees: latest FVC median 78.5 in diffuse
+against 88.0 in limited, a gap of 9.5 points, and DLCO 74.0 against 77.9.
 
 The fourth pattern is a negative result. Annual FVC decline is the standard endpoint in SSc
 trials, so I fit a per-patient slope for the 108 patients with at least three distinct FVC
@@ -384,25 +391,48 @@ not only its p-value.
 Merging the two duplicate registrations cost information. Each pair shares a name and a birth date
 and disagrees elsewhere, on subtype for one of the two. I keep the registry row of the id with more
 clinical rows, drop the other, and log the disagreeing field names so the merge can be reversed,
-but the analysis runs on one of two readings of those two patients.
+but the analysis runs on one of two readings of those two patients. That is a reproducible rule and
+not an adjudicated decision: nobody reviewed either pair, the pipeline picks the canonical id from
+the row counts at build time, and a disease-field conflict is logged and then merged anyway.
+Listing the two pairs in an explicit adjudication table as `original_id` to `canonical_id`
+mappings, and refusing to merge a conflict that is not listed there, is the next step and it is
+open.
+
+The build is not atomic and it writes no manifest. `scripts/build.py` overwrites the parquet frames
+one at a time and `data_ready()` in `app/common.py` checks for `features.parquet` alone, so a run
+that fails halfway leaves a directory the app still reads as complete, and a frame the pipeline
+stops producing stays behind. Writing the whole build to a temporary directory, recording rows,
+columns and a build time in a manifest, and validating that manifest before the app loads anything
+is the fix and it is open.
+
+The project is a script layout rather than an installed package. The app, the notebooks and the
+tests each reach the pipeline through `sys.path.insert()`, there is no `pyproject.toml` and no
+linter configuration in the repository, and the cleaning layer keeps its issue log and its id remap
+in module-level variables that the tests have to reset between cases. None of that changes a
+number, and all of it is open.
 
 There is no schema validation. `tests/test_smoke.py` checks that the pipeline runs and that its
 output has the expected shape: the raw loader returns 11 tables, the build returns 19 frames, the
-issue log has its five columns and is not empty, and every measurement frame carries
-`subject_id`. `tests/test_rules.py` checks individual rules: the three prevalence rates under no,
-partial and complete missingness, the association test gate on small expected counts, the
-onset-order flag when a milestone date is missing, the non-numeric coercions that must reach the
-issue log, the refusal to merge two registrations on an incomplete identity key, the fail-fast on
-registry id sets that differ, the index after quarantine, and the distinct-date rule behind the
-FVC slope. Nothing tests dtypes or value ranges.
+issue log has its five columns and is not empty, and every measurement frame carries `subject_id`.
+`tests/test_rules.py` checks individual rules: the three prevalence rates under no, partial and
+complete missingness, the per-group ILD bounds and the fact that they overlap, a synthetic cohort
+where assigning the empty fields in opposite directions in the two groups reverses the
+complete-case ordering, per-group bounds that stay per-group when the two groups are missing the
+outcome at different rates, the notebook's use of the shared association test, the association test
+gate on small expected counts, the onset-order flag when a milestone date is missing, the
+non-numeric coercions that must reach the issue log, the refusal to merge two registrations on an
+incomplete identity key, the fail-fast on registry id sets that differ, the index after quarantine,
+and the distinct-date rule behind the FVC slope. Nothing tests dtypes or value ranges.
 
 What I would do next, in this order. Declare each raw table's schema with pandera and fail the
 build on a violation, so a new export cannot change a column type without being noticed. Require a
-minimum follow-up span before fitting an FVC slope: the 108 patients I fit have a median of 3 tests
+minimum follow-up span before fitting an FVC slope. The 108 patients I fit have a median of 3 tests
 over a median span of 1.00 year, and 72 of them span less than a year, which is too short to call a
-trend. Carry the RNA-seq batch into any analysis of the libraries, since it is a source of
-technical variation that nothing here accounts for, and four batches held a single sample before
-quarantine. The app is deployed on Streamlit Cloud (the link is in the README); the next step
-there is a pinned container image, so the reviewer's copy and mine run the same versions.
-Version the issue log with the build that produced it, so two runs can be compared rule by rule
-instead of file by file.
+trend; a one-year minimum would leave 36 of the 108. The feature does not apply that restriction,
+so `fvc_slope_pct_yr` is still fitted for every patient with three distinct measurement dates and
+the finding stays an exploratory analysis on short series. Carry the RNA-seq batch into any
+analysis of the libraries, since it is a source of technical variation that nothing here accounts
+for, and four batches held a single sample before quarantine. The app is deployed on Streamlit
+Cloud (the link is in the README); the next step there is a pinned container image, so the
+reviewer's copy and mine run the same versions. Version the issue log with the build that produced
+it, so two runs can be compared rule by rule instead of file by file.

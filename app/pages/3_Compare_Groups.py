@@ -7,7 +7,7 @@ from scipy.stats import kruskal, mannwhitneyu
 from common import (BLUE, GROUP_COLORS, GROUP_VARS, NUMERIC_VARS,
                     RATE_OUTCOMES, data_ready, footer, load, page_setup,
                     yes_no)
-from ssc_coh.stats import association_test, prevalence_summary
+from ssc_coh.stats import association_test, prevalence_by_group
 
 page_setup("Compare Groups")
 st.title("Compare groups")
@@ -73,17 +73,26 @@ else:
     # the grouping variable cannot also be the outcome
     outcome = st.selectbox("Outcome", [o for o in RATE_OUTCOMES if o != group_col],
                            format_func=RATE_OUTCOMES.get)
+    # the prevalence of each group is computed on the filtered group universe, before the
+    # unrecorded outcomes are dropped, so every group carries its own missingness and its
+    # own bounds rather than the cohort's
+    group_prevalence = prevalence_by_group(df, group_col, outcome)
+    group_prevalence["bar_label"] = [f"{recorded} of {total}" for recorded, total
+                                     in zip(group_prevalence["n_recorded"],
+                                            group_prevalence["n_all"])]
     outcome_subset = df.dropna(subset=[outcome])
-    rate = (outcome_subset.groupby(group_col, observed=True)[outcome]
-            .agg(rate="mean", n="size").reset_index())
-    fig = px.bar(rate, x=group_col, y="rate", text="n",
+    fig = px.bar(group_prevalence, x="group", y="complete_case_rate", text="bar_label",
                  color_discrete_sequence=[BLUE])
     fig.update_layout(height=420, yaxis_tickformat=".0%",
                       xaxis_title=GROUP_VARS[group_col],
-                      yaxis_title=f"{RATE_OUTCOMES[outcome]} (bar label = n)",
+                      yaxis_title=f"{RATE_OUTCOMES[outcome]}, complete-case "
+                                  f"(bar label = recorded of total)",
                       margin=dict(l=10, r=10, t=20, b=10))
     st.plotly_chart(fig, width="stretch")
-    st.dataframe(rate.assign(rate=(rate["rate"] * 100).round(1)),
+    rate_columns = ["complete_case_rate", "lower_bound", "upper_bound"]
+    st.dataframe(group_prevalence[["group", "n_all", "n_recorded", "n_missing"] + rate_columns]
+                 .assign(**{column: (group_prevalence[column] * 100).round(1)
+                            for column in rate_columns}),
                  hide_index=True)
 
     # the chi-square approximation is judged on expected counts, not on the observed
@@ -96,18 +105,22 @@ else:
     else:
         st.markdown(f"{association.test_name} association: "
                     f"**p = {association.p_value:.2e}** ({association.reason})")
-    if outcome.startswith("dx_"):
-        # the missingness is a property of the whole cohort, so the bounds are quoted
-        # against every registered patient rather than against the current selection
-        outcome_prevalence = prevalence_summary(feat[outcome])
-        st.caption(f"Comorbidity fields come from free text left empty for "
-                   f"{outcome_prevalence.n_missing} of the {outcome_prevalence.n_all} patients "
-                   f"in the cohort. Every rate above is a complete-case estimate, computed among "
-                   f"the patients in that group whose field was recorded. Across the whole cohort "
-                   f"the complete-case estimate is {outcome_prevalence.complete_case_rate:.1%}; "
-                   f"reading every empty field as no comorbidity gives "
-                   f"{outcome_prevalence.lower_bound:.1%} and reading every one as a recorded "
-                   f"comorbidity gives {outcome_prevalence.upper_bound:.1%}. Those two bounds are "
-                   f"how far the empty fields alone can move the rate, not a confidence interval.")
+    unrecorded_total = int(group_prevalence["n_missing"].sum())
+    if unrecorded_total:
+        own_missingness = (f"lower_bound reads every unrecorded patient in the group as a negative "
+                           f"and upper_bound reads every one as a positive, so each group is bounded "
+                           f"by its own missingness: the n_missing column shows how the "
+                           f"{unrecorded_total} unrecorded patients of the "
+                           f"{int(group_prevalence['n_all'].sum())} in this selection fall across the "
+                           f"groups. Those bounds are a sensitivity range, not a confidence interval, "
+                           f"and two groups whose complete-case rates differ can still have "
+                           f"overlapping bounds.")
+    else:
+        own_missingness = ("The outcome is recorded for every patient in this selection, so each "
+                           "group's bounds sit on its complete-case rate.")
+    st.caption(f"Each bar is the complete-case rate of its group: the patients with "
+               f"{RATE_OUTCOMES[outcome]} divided by the patients in that group whose field was "
+               f"recorded. {own_missingness} The association test above uses only the "
+               f"{len(outcome_subset)} patients whose outcome was recorded.")
 
 footer()

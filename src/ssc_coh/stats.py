@@ -57,6 +57,22 @@ def prevalence_summary(flag_values: pd.Series) -> PrevalenceSummary:
                              lower_bound=lower_bound, upper_bound=upper_bound)
 
 
+def prevalence_by_group(frame: pd.DataFrame, group_col: str, flag_col: str) -> pd.DataFrame:
+    """One prevalence summary per group, computed before the unrecorded rows are dropped.
+
+    Every group keeps its own denominator, so a group that is missing the flag more
+    often than another gets wider bounds. Cohort-level bounds cannot show that, and
+    two groups whose complete-case rates differ can still have overlapping bounds.
+    """
+    rows = []
+    for group_value, group_rows in frame.groupby(group_col, observed=True, sort=True):
+        summary = prevalence_summary(group_rows[flag_col])
+        rows.append({"group": group_value, **summary.as_dict()})
+    return pd.DataFrame(rows, columns=["group", "n_all", "n_recorded", "n_missing",
+                                       "n_positive", "complete_case_rate",
+                                       "lower_bound", "upper_bound"])
+
+
 MIN_EXPECTED_COUNT = 5           # the smallest expected cell a chi-square approximation needs
 
 
@@ -68,6 +84,8 @@ class AssociationTest:
     p_value: float
     smallest_expected_count: float
     reason: str
+    statistic_name: str = "none"       # "chi-square" or "odds ratio", so the number can be quoted with its name
+    statistic: float = float("nan")
 
 
 def association_test(contingency: pd.DataFrame) -> AssociationTest:
@@ -86,12 +104,14 @@ def association_test(contingency: pd.DataFrame) -> AssociationTest:
     smallest_expected = float(expected_counts.min())
     if smallest_expected >= MIN_EXPECTED_COUNT:
         return AssociationTest("chi-square", float(chi_square_p), smallest_expected,
-                               f"smallest expected count {smallest_expected:.1f}")
+                               f"smallest expected count {smallest_expected:.1f}",
+                               statistic_name="chi-square", statistic=float(chi_square))
     if contingency.shape == (2, 2):
-        _, fisher_p = fisher_exact(contingency)
+        odds_ratio, fisher_p = fisher_exact(contingency)
         return AssociationTest("Fisher's exact", float(fisher_p), smallest_expected,
                                f"smallest expected count {smallest_expected:.1f}, below the "
-                               f"{MIN_EXPECTED_COUNT} a chi-square needs")
+                               f"{MIN_EXPECTED_COUNT} a chi-square needs",
+                               statistic_name="odds ratio", statistic=float(odds_ratio))
     return AssociationTest("none", float("nan"), smallest_expected,
                            f"smallest expected count {smallest_expected:.1f}, below the "
                            f"{MIN_EXPECTED_COUNT} a chi-square needs, and the table is "

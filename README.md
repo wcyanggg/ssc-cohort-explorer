@@ -43,6 +43,8 @@ src/ssc_coh/                        the pipeline
    config.py                        paths, id and date column per table, aliases, fixed thresholds
    clean.py                         every quality rule, each one written to the issue log
    features.py                      one row per patient
+   stats.py                         prevalence bounds and the association-test gate, shared
+                                    by the app, the notebook and the tests
    │
    ▼
 scripts/build.py                    runs clean, then features, writes everything below
@@ -66,11 +68,12 @@ never touches the raw files.
 ```
 data/raw/         11 source CSVs, committed (synthetic, no PHI)
 data/processed/   19 parquet frames plus issues.csv, committed
-src/ssc_coh/      config.py, raw.py, clean.py, features.py
+src/ssc_coh/      config.py, raw.py, clean.py, features.py, stats.py
 scripts/          build.py
 app/              common.py, Home.py, pages/ (five pages)
 notebooks/        00_first_look.ipynb (raw), 01_disease_patterns.ipynb (processed)
-tests/            test_smoke.py
+tests/            test_smoke.py (pipeline runs and output shape),
+                  test_rules.py (individual cleaning and statistics rules)
 REPORT.md         the write-up
 ```
 
