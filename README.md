@@ -4,6 +4,9 @@ An audit, cleaning pipeline and interactive browser for a fully synthetic system
 registry of 11 CSV source tables, covering clinical follow-up and the research sample chain from
 bronchoalveolar lavage to RNA-seq libraries. No PHI anywhere in the project.
 
+Live app: https://ssc-cohort-explorer-vrvc7q36vhdm865v7rdx7p.streamlit.app/ (the first load takes
+about twenty seconds while the instance wakes up).
+
 ## Quickstart
 
 Python 3.12.
