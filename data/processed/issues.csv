@@ -12,7 +12,7 @@ demographics,height in two units (inches and cm),standardized to cm; values belo
 demographics,kg weights among pounds,"standardized to kg (vitals cross-check first, BMI plausibility second)",14,"14 from the vitals kg list, 0 from the BMI rule alone"
 demographics,weight impossible in both lb and kg,set to missing,1,['subject_8545']
 ssc_subtype,rows recorded under a duplicate-registration id,subject_id rewritten to the canonical id,2,
-ssc_subtype,second registry row of a merged patient,dropped; the row of the canonical id is kept,2,"fields on which the two rows disagree: subject_7539: ['study_code', 'raynaud_date', 'nonraynaud_date', 'nonraynaud_sx', 'diagnosis_date']; subject_8994: ['study_code', 'ssc_subtype', 'other_dx', 'raynaud_date', 'nonraynaud_date', 'nonraynaud_sx', 'diagnosis_date']"
+ssc_subtype,second registry row of a merged patient,dropped; the row of the canonical id is kept,2,"fields on which the two rows disagree: subject_7539: ['study_code', 'raynaud_date', 'nonraynaud_date', 'nonraynaud_sx', 'diagnosis_date'] needs adjudication; subject_8994: ['study_code', 'ssc_subtype', 'other_dx', 'raynaud_date', 'nonraynaud_date', 'nonraynaud_sx', 'diagnosis_date'] needs adjudication"
 ssc_subtype,raynaud_date after nonraynaud_date,"flagged, dates not changed",307,"rate by subtype: {'dcSSc': 0.201, 'lcSSc': 0.208}"
 ssc_subtype,diagnosis_date before nonraynaud_date,flagged only (early diagnosis on Raynaud's plus antibodies is possible),51,
 ssc_subtype,other_dx missing,comorbidity flags left unknown (not false) where other_dx is missing,555,37% of patients
@@ -20,7 +20,7 @@ lab_report,"DIFFERENTIAL TYPE is the method of the count, not a measurement",spl
 lab_report,"sentinel and impossible values (999, 9999, negatives, RBC = 0)",set to missing,12,"{('ABSOLUTE LYMPHOCYTES', 9999.0): 1, ('HEMOGLOBIN', -4.0): 2, ('LYMPHOCYTES', -12.0): 1, ('MCH', 9999.0): 1, ('MCHC', 9999.0): 1, ('MCV', -10.0): 1, ('NEUTROPHILS', -12.0): 1, ('NM BKR ABSOLUTE NEUTROPHIL', -10.0): 1, ('RBC', 0.0): 1, ('WBC', 999.0): 2}"
 pft,rows recorded under a duplicate-registration id,subject_id rewritten to the canonical id,3,
 pft,DLCO_SB missing,"kept missing, no imputation",794,49% of DLCO rows
-pft,FEV1 = FVC + noise (uninformative; the ratio carries no physiology),kept + flagged; FEV1 and FEV1/FVC not used in analyses,2655,"904 visits, 2655 rows (every PFT row of those visits); ratio median 1.003, share below 0.90 0.1%"
+pft,FEV1 tracks FVC and adds no usable variation in this dataset,kept + flagged; FEV1 and FEV1/FVC not used in analyses,2655,"904 visits, 2655 rows (every PFT row of those visits); ratio median 1.003, share below 0.90 0.1%"
 pft,"values at the generator bounds (40.0, 130.0)","kept, documented",32,"{('DLCO_SB', 40.0): 15, ('DLCO_SB', 130.0): 5, ('FEV1', 40.0): 3, ('FEV1', 130.0): 3, ('FVC', 40.0): 5, ('FVC', 130.0): 1}"
 mrss,two scores on the same visit date,kept + flagged,2,['subject_2545']
 medications,rows recorded under a duplicate-registration id,subject_id rewritten to the canonical id,8,

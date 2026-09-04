@@ -45,10 +45,15 @@ REFERENCE = pd.Timestamp(REFERENCE_DATE)
 LONG_TABLES = ("vitals", "lab_report", "pft", "mrss", "medications",
                "antibodies", "bal", "skin_biopsies", "libraries")
 
+# registry fields that describe the disease itself. Two registrations of one person
+# that disagree on any of these need a human decision, not a row count.
+DISEASE_FIELDS = ("ssc_subtype", "other_dx", "diagnosis", "diagnosis_date",
+                  "nonraynaud_sx", "raynaud_date", "nonraynaud_date")
+
 # Fixed decisions, numbered as in REPORT.md (section 3)
 HEIGHT_CM_THRESHOLD = 100            # issue 1: a height below this is inches, at or above it is cm
 BMI_PLAUSIBLE = (12, 70)             # issue 2: generous bounds, so genuinely obese patients are not "cleaned" away
-KG_IF_RECORDED_BMI_BELOW = 15        # issue 11: a recorded BMI below this proves the patient's weights are kg
+KG_IF_RECORDED_BMI_BELOW = 15        # issue 11: a recorded BMI below this only happens when the weights are already kg
 DEFAULT_WEIGHT_LB = 160.6            # issue 10: the template default that replaces whole weight histories
 BP_DEFAULTS = {"BP SYSTOLIC": 124.0, "BP DIASTOLIC": 77.0, "PULSE": 76.0}   # issue 12: template defaults
 LAB_MISSING_CODES = (999.0, 9999.0)  # issue 15: classic placeholder codes for a missing result
@@ -167,7 +172,8 @@ def drop_merged_second_rows(table: pd.DataFrame, table_name: str, original_ids: 
         for patient_id, rows in ordered[ordered["subject_id"].isin(ordered.loc[is_second_row, "subject_id"])].groupby("subject_id"):
             compared = rows.drop(columns=["_canonical", "subject_id"]).astype(str)
             differing = [column for column in compared.columns if compared[column].nunique() > 1]
-            disagreements.append(f"{patient_id}: {differing if differing else 'identical'}")
+            note = " needs adjudication" if set(differing) & set(DISEASE_FIELDS) else ""
+            disagreements.append(f"{patient_id}: {differing if differing else 'identical'}{note}")
         _ISSUES.add(table_name, "second registry row of a merged patient",
                     "dropped; the row of the canonical id is kept", int(is_second_row.sum()),
                     detail="fields on which the two rows disagree: " + "; ".join(disagreements))
@@ -183,9 +189,22 @@ def find_duplicate_registrations(demographics: pd.DataFrame,
 
     One id per person is kept as canonical: the one with more rows across the
     longitudinal tables, the smaller number on a tie. The other id is remapped.
+
+    A row with a missing first name, last name or birth date is not matched
+    automatically: two people can share the fields that remain, so the evidence
+    is not enough to merge on. Those rows are logged for manual review instead.
     """
-    ids_by_person = demographics.groupby(["first name", "last name", "birth date"],
-                                         dropna=False)["case number"].apply(list)
+    identity_key = ["first name", "last name", "birth date"]
+    identity_key_incomplete = demographics[identity_key].isna().any(axis=1)
+    if identity_key_incomplete.any():
+        _ISSUES.add("demographics", "incomplete identity key (first name, last name or birth date missing)",
+                    "left unmerged; automatic duplicate matching needs all three fields",
+                    int(identity_key_incomplete.sum()),
+                    detail="needs adjudication: "
+                           + str(demographics.loc[identity_key_incomplete, "case number"].tolist()))
+    complete_identity = demographics[~identity_key_incomplete]
+
+    ids_by_person = complete_identity.groupby(identity_key, dropna=False)["case number"].apply(list)
     remap: dict[str, str] = {}
     for ids in ids_by_person[ids_by_person.str.len() > 1]:
         rows_by_id = {
@@ -236,7 +255,7 @@ def clean_vitals(vitals_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
                 detail=f"{int(is_default_weight.sum())} weight rows over {len(patients_with_default)} patients, "
                        f"{n_patients_all_weights_default} of them with no other weight on record")
 
-    # issue 11: a recorded BMI below 15 proves the patient's weights are kg, and the
+    # issue 11: a recorded BMI below 15 only happens when the weights are already kg, and the
     # stored BMI was computed from that kg number with the pound formula
     kg_patients = sorted(vitals.loc[is_bmi & (vitals["value"] < KG_IF_RECORDED_BMI_BELOW), "subject_id"].unique())
     weight_is_kg = is_weight & vitals["subject_id"].isin(kg_patients)
@@ -289,6 +308,9 @@ def clean_demographics(demographics_raw: pd.DataFrame, kg_patients: list[str]) -
 
     # issue 1: height in two units
     height = pd.to_numeric(demographics["height"], errors="coerce")
+    height_not_numeric = int((demographics["height"].notna() & height.isna()).sum())
+    if height_not_numeric:
+        _ISSUES.add("demographics", "non-numeric height", "set to missing", height_not_numeric)
     height_is_inches = height < HEIGHT_CM_THRESHOLD
     demographics["height_cm"] = np.where(height_is_inches, height * CM_PER_INCH, height)
     _ISSUES.add("demographics", "height in two units (inches and cm)",
@@ -298,6 +320,9 @@ def clean_demographics(demographics_raw: pd.DataFrame, kg_patients: list[str]) -
     # issues 2, 3, 11: weight is pounds unless (a) the patient is on the kg list from
     # vitals or (b) the pound reading gives an impossible BMI while kg is plausible
     weight = pd.to_numeric(demographics["weight"], errors="coerce")
+    weight_not_numeric = int((demographics["weight"].notna() & weight.isna()).sum())
+    if weight_not_numeric:
+        _ISSUES.add("demographics", "non-numeric weight", "set to missing", weight_not_numeric)
     height_m2 = (demographics["height_cm"] / 100) ** 2
     bmi_if_lb = (weight / LB_PER_KG) / height_m2
     bmi_if_kg = weight / height_m2
@@ -341,11 +366,21 @@ def clean_ssc_subtype(ssc_subtype_raw: pd.DataFrame) -> pd.DataFrame:
 
     # issue 7: Raynaud's dated after the first non-Raynaud symptom, at the same rate in both
     # subtypes: an unconstrained generator draw, flagged and never swapped
-    raynaud_after = ssc_subtype["raynaud_date"] > ssc_subtype["nonraynaud_date"]
-    ssc_subtype["onset_order_flag"] = np.where(raynaud_after, "raynaud_after_nonraynaud", "ok")
+    # a patient missing either date has no onset order to compare, so the flag is
+    # "unknown" there rather than "ok"
+    onset_dates_known = ssc_subtype["raynaud_date"].notna() & ssc_subtype["nonraynaud_date"].notna()
+    raynaud_after = onset_dates_known & (ssc_subtype["raynaud_date"] > ssc_subtype["nonraynaud_date"])
+    ssc_subtype["onset_order_flag"] = np.select(
+        [~onset_dates_known, raynaud_after],
+        ["unknown", "raynaud_after_nonraynaud"],
+        default="ok",
+    )
     _ISSUES.add("ssc_subtype", "raynaud_date after nonraynaud_date",
                 "flagged, dates not changed", int(raynaud_after.sum()),
                 detail="rate by subtype: " + str(raynaud_after.groupby(ssc_subtype["ssc_subtype"]).mean().round(3).to_dict()))
+    if (~onset_dates_known).any():
+        _ISSUES.add("ssc_subtype", "raynaud_date or nonraynaud_date missing",
+                    "onset_order_flag set to unknown", int((~onset_dates_known).sum()))
 
     # issue 8: diagnosed before the first non-Raynaud symptom (possible; flagged only)
     ssc_subtype["diagnosis_before_symptom_flag"] = (
@@ -416,10 +451,14 @@ def clean_labs(lab_report_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame
 
 # ------------------------------------------------------------------- pft
 def clean_pft(pft_raw: pd.DataFrame) -> pd.DataFrame:
-    """Lung function: DLCO missingness logged, FEV1 flagged as uninformative, clipping logged."""
+    """Lung function: DLCO missingness logged, FEV1 flagged, clipping logged."""
     pft = open_long_table("pft", pft_raw, ["subject_id", "date", "NAME", "ORD_VALUE"])
     pft = pft.rename(columns={"NAME": "measure", "ORD_VALUE": "value"})
-    pft["value"] = pd.to_numeric(pft["value"], errors="coerce")
+    pft_value_num = pd.to_numeric(pft["value"], errors="coerce")
+    n_not_numeric = int((pft["value"].notna() & pft_value_num.isna()).sum())
+    if n_not_numeric:
+        _ISSUES.add("pft", "non-numeric PFT value", "set to missing", n_not_numeric)
+    pft["value"] = pft_value_num
 
     # issue 24: DLCO is measured less often; genuine absence, no imputation
     is_dlco = pft["measure"].eq("DLCO_SB")
@@ -427,9 +466,10 @@ def clean_pft(pft_raw: pd.DataFrame) -> pd.DataFrame:
                 int(pft.loc[is_dlco, "value"].isna().sum()),
                 detail=f"{pft.loc[is_dlco, 'value'].isna().mean():.0%} of DLCO rows")
 
-    # issue 25: FEV1 is FVC plus noise. In % predicted, FEV1 above FVC is not impossible;
-    # the anomaly is a ratio pinned at 1.00 with no obstructive tail and no link to
-    # subtype or fibrosis. The pairs are flagged; FEV1 is excluded from analyses as uninformative.
+    # issue 25: in this dataset FEV1 tracks FVC and adds no usable variation. In % predicted,
+    # FEV1 above FVC is not impossible; what stands out here is a ratio sitting at 1.00 with
+    # no obstructive tail and no association with subtype or with recorded fibrosis. The pairs
+    # are flagged and FEV1 is left out of the analyses, which is a statement about this export.
     by_visit = pft.pivot_table(index=["subject_id", "date"], columns="measure",
                                values="value", aggfunc="first")
     if {"FEV1", "FVC"}.issubset(by_visit.columns):
@@ -438,7 +478,7 @@ def clean_pft(pft_raw: pd.DataFrame) -> pd.DataFrame:
         pft["fev1_gt_fvc_flag"] = visit_key.isin(fev1_above_fvc_visits)
         n_flagged_rows = int(pft["fev1_gt_fvc_flag"].sum())
         ratio = by_visit["FEV1"] / by_visit["FVC"]
-        _ISSUES.add("pft", "FEV1 = FVC + noise (uninformative; the ratio carries no physiology)",
+        _ISSUES.add("pft", "FEV1 tracks FVC and adds no usable variation in this dataset",
                     "kept + flagged; FEV1 and FEV1/FVC not used in analyses",
                     n_flagged_rows,
                     detail=f"{len(fev1_above_fvc_visits)} visits, {n_flagged_rows} rows (every PFT row of "
@@ -702,8 +742,10 @@ def quarantine_controls(table: pd.DataFrame, table_name: str,
     if is_orphan.any():
         _ISSUES.add(table_name, "rows with no registry match", "quarantined to the controls frame",
                     int(is_orphan.sum()))
-    keep = table[~(is_control | is_orphan)]
-    quarantined = table[is_control | is_orphan]
+    # both frames are reindexed so the in-memory result matches what comes back
+    # from the parquet files, which are written with index=False
+    keep = table[~(is_control | is_orphan)].reset_index(drop=True)
+    quarantined = table[is_control | is_orphan].reset_index(drop=True)
     return keep, quarantined
 
 
@@ -723,10 +765,17 @@ def build_processed() -> dict[str, pd.DataFrame]:
     demographics = clean_demographics(raw_tables["demographics"], kg_patients)
     ssc_subtype = clean_ssc_subtype(raw_tables["ssc_subtype"])
     registered_ids = set(demographics["subject_id"])
-    if registered_ids != set(ssc_subtype["subject_id"]):
-        _ISSUES.add("linkage", "demographics and ssc_subtype id sets differ", "intersection used as cohort",
-                    detail=f"demographics only: {len(registered_ids - set(ssc_subtype['subject_id']))}, "
-                           f"ssc_subtype only: {len(set(ssc_subtype['subject_id']) - registered_ids)}")
+    subtype_ids = set(ssc_subtype["subject_id"])
+    if registered_ids != subtype_ids:
+        # the two registry tables define the cohort together, so a mismatch is a linkage
+        # failure to resolve at the source rather than something to quietly narrow down
+        raise ValueError(
+            "demographics and ssc_subtype cover different patients. "
+            f"In demographics only ({len(registered_ids - subtype_ids)}): "
+            f"{sorted(registered_ids - subtype_ids)}. "
+            f"In ssc_subtype only ({len(subtype_ids - registered_ids)}): "
+            f"{sorted(subtype_ids - registered_ids)}."
+        )
     diagnosis_date_by_patient = ssc_subtype.set_index("subject_id")["diagnosis_date"]
 
     # 3. the longitudinal tables

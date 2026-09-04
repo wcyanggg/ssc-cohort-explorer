@@ -28,13 +28,16 @@ MEASURE_COLORS = {"mRSS": RED, "FVC": BLUE, "DLCO": TEAL, "Weight": ORANGE,
 
 # one color per group label, shared by the Compare and Discover pages
 GROUP_COLORS = {**SUBTYPE_COLORS, **STATUS_COLORS,
-                "yes": STATUS_COLORS["positive"], "no": STATUS_COLORS["negative"]}
+                "yes": STATUS_COLORS["positive"], "no": STATUS_COLORS["negative"],
+                "unknown": LIGHTGRAY}
 
 # ---------------------------------------------------------------- table groups
-LONG_TABLES = ["vitals", "labs", "pft", "mrss", "medications", "antibodies"]
+CLINICAL_TABLES = ["vitals", "labs", "pft", "mrss", "medications", "antibodies"]
 RESEARCH_TABLES = ["bal", "biopsies", "libraries"]
-SOURCE_TABLES = ["subjects", "ssc_subtype"] + LONG_TABLES + RESEARCH_TABLES
-MAIN_TABLES = SOURCE_TABLES + ["features"]
+SOURCE_TABLES = ["subjects", "ssc_subtype"] + CLINICAL_TABLES + RESEARCH_TABLES
+# the Dictionary dropdown covers every processed table except the issue log and the
+# quarantined control rows, which each have their own tab on the Data & Quality page
+MAIN_TABLES = SOURCE_TABLES + ["features", "lab_differential_type", "subject_id_map"]
 
 # ---------------------------------------------------------------- metadata
 TABLE_DESCRIPTIONS = {

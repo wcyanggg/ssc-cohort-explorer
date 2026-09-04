@@ -1,7 +1,7 @@
 """Entry page for the SSc Cohort Explorer."""
 import streamlit as st
 
-from common import (LONG_TABLES, RESEARCH_TABLES, SOURCE_TABLES,
+from common import (CLINICAL_TABLES, RESEARCH_TABLES, SOURCE_TABLES,
                     TABLE_DESCRIPTIONS, data_ready, footer, load, page_setup)
 
 page_setup("Home")
@@ -19,7 +19,7 @@ if not data_ready():
 
 subjects = load("subjects")
 issues = load("issues")
-long_rows = sum(len(load(name)) for name in LONG_TABLES)
+long_rows = sum(len(load(name)) for name in CLINICAL_TABLES)
 research_rows = sum(len(load(name)) for name in RESEARCH_TABLES)
 
 c1, c2, c3, c4 = st.columns(4)

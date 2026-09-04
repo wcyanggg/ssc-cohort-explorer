@@ -2,11 +2,12 @@
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from scipy.stats import chi2_contingency, kruskal, mannwhitneyu
+from scipy.stats import kruskal, mannwhitneyu
 
 from common import (BLUE, GROUP_COLORS, GROUP_VARS, NUMERIC_VARS,
                     RATE_OUTCOMES, data_ready, footer, load, page_setup,
                     yes_no)
+from ssc_coh.stats import association_test, prevalence_summary
 
 page_setup("Compare Groups")
 st.title("Compare groups")
@@ -85,14 +86,28 @@ else:
     st.dataframe(rate.assign(rate=(rate["rate"] * 100).round(1)),
                  hide_index=True)
 
-    ct = pd.crosstab(outcome_subset[group_col], outcome_subset[outcome])
-    if ct.shape[0] >= 2 and ct.shape[1] == 2 and (ct.values >= 5).all():
-        chi2, p, _, _ = chi2_contingency(ct)
-        st.markdown(f"Chi-square association: **p = {p:.2e}**")
+    # the chi-square approximation is judged on expected counts, not on the observed
+    # cells; a 2x2 table that fails the check falls back to Fisher's exact test
+    contingency = pd.crosstab(outcome_subset[group_col], outcome_subset[outcome])
+    association = association_test(contingency)
+    if association.test_name == "none":
+        st.caption(f"No association test is shown: {association.reason}. The rates and "
+                   "counts above are the result.")
     else:
-        st.caption("Cells too small for a chi-square test.")
+        st.markdown(f"{association.test_name} association: "
+                    f"**p = {association.p_value:.2e}** ({association.reason})")
     if outcome.startswith("dx_"):
-        st.caption("Comorbidity fields come from free text missing for 37% "
-                   "of patients: rates are lower bounds on prevalence.")
+        # the missingness is a property of the whole cohort, so the bounds are quoted
+        # against every registered patient rather than against the current selection
+        outcome_prevalence = prevalence_summary(feat[outcome])
+        st.caption(f"Comorbidity fields come from free text left empty for "
+                   f"{outcome_prevalence.n_missing} of the {outcome_prevalence.n_all} patients "
+                   f"in the cohort. Every rate above is a complete-case estimate, computed among "
+                   f"the patients in that group whose field was recorded. Across the whole cohort "
+                   f"the complete-case estimate is {outcome_prevalence.complete_case_rate:.1%}; "
+                   f"reading every empty field as no comorbidity gives "
+                   f"{outcome_prevalence.lower_bound:.1%} and reading every one as a recorded "
+                   f"comorbidity gives {outcome_prevalence.upper_bound:.1%}. Those two bounds are "
+                   f"how far the empty fields alone can move the rate, not a confidence interval.")
 
 footer()

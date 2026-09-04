@@ -1,7 +1,11 @@
 """Subject-level feature matrix for cohort analysis and the discovery page.
 
-Long tables -> one row per subject: latest/mean/baseline measurements,
-visit counts, antibody status, and event indicators.
+Long tables become one row per subject: latest and mean and baseline
+measurements, visit counts, antibody status, and event indicators.
+
+A `_latest` column holds the latest valid value, not the value on the latest
+visit: the aggregation skips a missing reading and reads back to the most
+recent visit that carries a number.
 """
 from __future__ import annotations
 
@@ -109,15 +113,19 @@ def build_features(subjects: pd.DataFrame, ssc: pd.DataFrame,
     feat = feat.merge(counts, on="subject_id", how="left")
     feat[counts.columns[1:]] = feat[counts.columns[1:]].fillna(0).astype(int)
 
-    # FVC slope estimate (%/year) where >= 3 measurements
+    # Exploratory FVC slope (% predicted per year) for patients with at least three
+    # distinct FVC measurement dates. Repeat tests on one date add no time points, so
+    # the rule counts unique dates rather than rows. Everyone else keeps a missing
+    # slope; no annual rate is extrapolated for them.
     slopes = []
-    for sid, g in pft[pft["measure"] == "FVC"].groupby("subject_id"):
-        g = g.sort_values("date")
-        if len(g) >= 3:
-            x = (g["date"] - g["date"].min()).dt.days / 365.25
-            if x.max() > 0:
-                slopes.append({"subject_id": sid,
-                               "fvc_slope_pct_yr": np.polyfit(x, g["value"], 1)[0]})
+    for subject_id, fvc_rows in pft[pft["measure"] == "FVC"].groupby("subject_id"):
+        fvc_rows = fvc_rows.sort_values("date")
+        if fvc_rows["date"].nunique() >= 3:
+            years_from_first_test = (fvc_rows["date"] - fvc_rows["date"].min()).dt.days / 365.25
+            if years_from_first_test.max() > 0:
+                slopes.append({"subject_id": subject_id,
+                               "fvc_slope_pct_yr": np.polyfit(years_from_first_test,
+                                                              fvc_rows["value"], 1)[0]})
     if slopes:
         feat = feat.merge(pd.DataFrame(slopes), on="subject_id", how="left")
     else:

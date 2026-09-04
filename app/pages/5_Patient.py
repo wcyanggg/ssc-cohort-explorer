@@ -73,8 +73,8 @@ if len(pft_p):
                 line=dict(color=MEASURE_COLORS[label], width=2),
                 marker=dict(size=8)))
     if traces:
-        panels.append(("Lung function (% predicted; FEV1 excluded as "
-                       "uninformative, it tracks FVC)", traces))
+        panels.append(("Lung function (% predicted; FEV1 excluded, it tracks FVC "
+                       "and adds no usable variation in this dataset)", traces))
 weights = vit_p[vit_p.measure == "WEIGHT IN POUND"].dropna(subset=["value"])
 if len(weights):
     panels.append(("Weight (lb)", [

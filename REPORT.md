@@ -168,8 +168,9 @@ Clear errors become missing and get a row in the log. I never repair one by gues
 why the 22.5 weight, the 9999 lab values and the 250 g doses are blank rather than plausible.
 
 Structural artifacts stay in the data, carry a flag, and are excluded from the analyses they
-would distort. FEV1 and the blood-pressure trend are real values that mean nothing, so deleting
-them would hide the problem and using them would launder it.
+would distort. FEV1 and the blood-pressure trend are values a generator wrote rather than
+measurements of a patient, so deleting them would hide that and analyzing them would pass them
+off as measurements.
 
 Ambiguous values are flagged, surfaced in the app, and never altered: onset order, antibody
 flips, the library status contradictions, the timeline paradoxes. The data cannot say which
@@ -184,8 +185,8 @@ The Raynaud-after-symptom gap is the left tail of one smooth bell, identical in 
 with only 32 patients within 30 days of zero: an unconstrained generator draw, not swapped
 dates.
 
-FEV1 is excluded as uninformative, because it is FVC plus noise with no physiology in the ratio.
-My first draft called it impossible, which was wrong.
+FEV1 is left out of the analyses because it tracks FVC and adds no usable variation in this
+dataset. My first draft called it impossible, which was wrong.
 
 The mRSS rater spread is case mix. Dr. Fischer at 7.7 scored no diffuse patients and Dr. Rossi at
 25.8 scored 88% diffuse; inside one subtype the spread is a few points.
@@ -241,9 +242,13 @@ caught 7.
 
 The comorbidity flags `dx_ild`, `dx_gerd` and `dx_pah` are parsed out of the free-text `other_dx`
 field and are three-state. Where `other_dx` is empty the flag is unknown rather than false, which
-is 555 of the 1,498 patients. Every rate built on them therefore has two readings: among the 943
-patients whose field was recorded, and among all 1,498 with an empty field read as no
-comorbidity. Both appear side by side in the notebook and in the app.
+is 555 of the 1,498 patients. Every rate built on them therefore comes as three numbers: the complete-case
+estimate among the 943 patients whose field was recorded, a lower bound that reads all 555 empty
+fields as no comorbidity, and an upper bound that reads all 555 as a comorbidity. For ILD those
+are 67.1%, 42.3% and 79.3%; for GERD 45.5%, 28.6% and 65.7%; for PAH 12.4%, 7.8% and 44.9%. The
+bounds are a missing-data sensitivity range, not a confidence interval, and nothing here says
+where inside them the rate would land if the field had been filled in. All three appear together
+in the notebook and in the app.
 
 Merging the two duplicate registrations was the one identity fix that cost information. Each pair
 shares a name and a birth date but disagrees elsewhere. In `demographics`, `subject_7539`
@@ -256,38 +261,42 @@ and log the disagreeing fields by name so the choice can be reversed.
 
 ## 5. Findings
 
-I tested four patterns against the cleaned layer. The cohort lands where SSc epidemiology
-predicts before any of them: 1,498 patients, 82.4% female, 900 limited against 598 diffuse, ages
+I tested four patterns against the cleaned layer. The composition matches what SSc epidemiology
+reports before any of them: 1,498 patients, 82.4% female, 900 limited against 598 diffuse, ages
 36 to 82.
 
 Antibodies track subtype in the directions the literature reports. Anti-centromere is positive in
 47.1% of limited patients against 5.0% of diffuse, a ninefold gap over 914 tested patients
 (chi-square 174.2, p = 8.8e-40). Scl-70 leans the other way, 52.3% diffuse against 36.9% limited,
 and RNA polymerase III leans the same way weakly, 13.1% against 8.4% (p = 0.039). All three
-directions coming out right is the evidence that the antibody table is joined to the right
-patients.
+directions come out the way the literature reports, which is consistent with the antibody table
+being joined to the right patients. The linkage itself is checked by the id sets, referential
+integrity, duplicate keys and row counts, not by the clinical direction.
 
 Skin severity separates the subtypes almost completely. Latest mRSS has a median of 24 in diffuse
 disease against 8 in limited, quartiles 21 to 28 against 5 to 12, so the two middle halves do not
 overlap, and the mean across visits gives the same separation, 23.4 against 8.0. 821 of the 1,498
 patients have a skin score at all, across 3,110 visits.
 
-The lung triangle holds on all three edges. Among patients whose comorbidity field was recorded,
+Recorded ILD moves with all three groupings. Among patients whose comorbidity field was recorded,
 ILD is noted for 84.0% of Scl-70 positive patients against 57.2% of Scl-70 negative, for 37.1% of
 anti-centromere positive against 74.0% of anti-centromere negative, and for 86.1% of diffuse
-against 50.6% of limited. Reading an empty field as no comorbidity lowers every rate and leaves
-the ordering untouched: 64.7% against 32.3% by Scl-70, 18.1% against 50.4% by anti-centromere,
-63.2% against 28.3% by subtype. The chi-square is decisive under both denominators. The true rate
-lies between the two columns, because an empty field can mean there was nothing to record or that
-nobody recorded it, and no analysis here picks one. Lung function agrees: latest FVC median 78.5
+against 50.6% of limited. The bounds are wide and the ordering survives both of them. Reading every
+empty field as no ILD gives 64.7% against 32.3% by Scl-70, 18.1% against 50.4% by
+anti-centromere, 63.2% against 28.3% by subtype; reading every empty field as ILD gives 87.7%
+against 75.8%, 69.3% against 82.3%, and 89.8% against 72.3%. The chi-square is decisive under
+either denominator that can be tested. An empty field can mean there was nothing to record or
+that nobody recorded it, and no analysis here picks between the two. Lung function agrees: latest FVC median 78.5
 in diffuse against 88.0 in limited, a gap of 9.5 points, and DLCO 74.0 against 77.9.
 
 The fourth pattern is a negative result. Annual FVC decline is the standard endpoint in SSc
-trials, so I fit a per-patient slope for the 108 patients with at least three FVC tests. The
-slopes center just above zero, median 0.60 and mean 0.18% predicted per year, with 47 patients
-(43.5%) falling rather than rising. The subtypes are indistinguishable (p = 0.96) and the whole
-set does not differ from zero (p = 0.31). This cohort carries cross-sectional lung differences
-and no progressive decline.
+trials, so I fit a per-patient slope for the 108 patients with at least three distinct FVC
+measurement dates. The slopes center just above zero, median 0.60 and mean 0.18% predicted per
+year, with 47 patients (43.5%) falling rather than rising. The subtypes are indistinguishable
+(p = 0.96) and the whole set does not differ from zero (p = 0.31). No cohort-level decline was
+detected among the patients who qualify for this exploratory slope analysis. Their series are
+short, a median span of 1.00 year with 72 of the 108 under a year, so the result is about these
+108 short series and not about the disease or the rest of the cohort.
 
 ## 6. The app
 
@@ -295,28 +304,31 @@ Five pages, each a level further into the data, all reading the same cleaned par
 
 Data & Quality carries the dictionary for every table with dtypes and fill rates, the coverage
 and linkage report, the issue log as a filterable download, and the quarantined control rows. The
-design decision is that quarantine is a tab rather than a delete, because removing the four
+quarantine is a tab rather than a delete, because removing the four
 `SSC_NORM_*` subjects would hide the linkage problem that found them.
 
 Cohort shows who is in the registry (age, sex, disease duration) and the patterns that hold
-across it. The design decision is that the ILD chart plots both denominators side by side rather
-than picking one, since `other_dx` is unrecorded for 37% of patients.
+across it. The ILD chart gives each group three bars rather than one, the complete-case estimate
+and the two bounds, since `other_dx` is unrecorded for 37% of patients and the caption says what
+the gap between the bounds does and does not mean.
 
 Compare Groups crosses any grouping variable with any numeric measure or outcome rate, with a box
-plot, a median and IQR table, and a Mann-Whitney, Kruskal-Wallis or chi-square test. The design
-decision is that the tests are rank-based and the caption calls the p-values screening rather
-than confirmation, since there is no multiplicity correction.
+plot, a median and IQR table, and a Mann-Whitney, Kruskal-Wallis, chi-square or Fisher's exact
+test. The tests are rank-based and the caption calls the p-values screening rather than
+confirmation, since there is no multiplicity correction. The chi-square is shown only when every
+expected cell count reaches 5; a 2x2 table below that falls back to Fisher's exact test and a
+larger one gets the descriptives with the reason.
 
 Discover Structure is the open-ended page: a correlation matrix in Spearman or Pearson, a PCA
-projection colored by any grouping with its top loadings printed, and a free X-Y explorer. The
-design decision is that PCA imputes missing values at the column median and says so, because
-dropping incomplete rows would discard most of the cohort.
+projection colored by any grouping with its top loadings printed, and a free X-Y explorer. PCA
+imputes missing values at the column median and says so, because dropping incomplete rows would
+discard most of the cohort.
 
 Patient draws one person's trajectory on a shared time axis: skin score, lung function, weight
 and blood pressure in aligned panels with the three disease milestones as vertical lines across
 all of them, then tabs down to medications, antibody history, labs and research samples. The
-design decision is that shared axis, because the question the page exists to answer is whether
-the skin and the lungs move together.
+axis is shared because the question the page exists to answer is whether the skin and the lungs
+move together.
 
 ## 7. How I worked with AI tools, and how I checked the output
 
@@ -326,14 +338,19 @@ genuinely obese patients. I redesigned it around the vitals BMI cross-check; the
 converts 14 patients from the vitals evidence, 0 from BMI plausibility alone, and sets 1 weight
 to missing.
 
-I had an independent sub-agent recompute every number in the two audit documents straight from
-the raw files. 50 of 56 matched and 6 were corrected, among them the metric-subject counts, the
-direction of the unit conversion, and DLCO missingness by subtype, which the draft had the wrong
-way round.
+I ran a separate verification pass over the two audit documents, recomputing every number
+straight from the raw files rather than from the draft. It was a second model run of the same
+kind, so it is not an independent check in the statistical sense; what it does is recompute
+rather than reread. 50 of 56 numbers matched and 6 were corrected, among them the metric-subject
+counts, the direction of the unit conversion, and DLCO missingness by subtype, which the draft
+had the wrong way round. Three things check the pipeline separately: rerunning `scripts/build.py`
+from the raw files reproduces the parquet layer, the assertions in `tests/` fix the rules and the
+prevalence bounds in code, and I read `clean.py` line by line against the issue log.
 
 I asked why FEV1 above FVC should be impossible. It is not. Both columns are % predicted with
 different denominators, and in restrictive disease FEV1 % predicted at or above FVC % predicted
-is common. The finding was reframed from impossible to uninformative, FVC plus noise.
+is common. The finding was reframed from impossible to a column that tracks FVC and adds no
+usable variation in this dataset.
 
 Re-reading `clean.py` line by line showed the issue-log frame was materialized before the
 quarantine step, so four entries never reached `issues.csv`. Fixing that exposed a second error:
@@ -369,10 +386,15 @@ and disagrees elsewhere, on subtype for one of the two. I keep the registry row 
 clinical rows, drop the other, and log the disagreeing field names so the merge can be reversed,
 but the analysis runs on one of two readings of those two patients.
 
-There is no schema validation, and the only automated check is `tests/test_smoke.py`: the raw
-loader returns 11 tables, the build returns 19 frames, the issue log has its five columns and is
-not empty, and every measurement frame carries `subject_id`. Nothing tests dtypes, value ranges or
-the cleaning rules themselves.
+There is no schema validation. `tests/test_smoke.py` checks that the pipeline runs and that its
+output has the expected shape: the raw loader returns 11 tables, the build returns 19 frames, the
+issue log has its five columns and is not empty, and every measurement frame carries
+`subject_id`. `tests/test_rules.py` checks individual rules: the three prevalence rates under no,
+partial and complete missingness, the association test gate on small expected counts, the
+onset-order flag when a milestone date is missing, the non-numeric coercions that must reach the
+issue log, the refusal to merge two registrations on an incomplete identity key, the fail-fast on
+registry id sets that differ, the index after quarantine, and the distinct-date rule behind the
+FVC slope. Nothing tests dtypes or value ranges.
 
 What I would do next, in this order. Declare each raw table's schema with pandera and fail the
 build on a violation, so a new export cannot change a column type without being noticed. Require a
@@ -380,6 +402,7 @@ minimum follow-up span before fitting an FVC slope: the 108 patients I fit have 
 over a median span of 1.00 year, and 72 of them span less than a year, which is too short to call a
 trend. Carry the RNA-seq batch into any analysis of the libraries, since it is a source of
 technical variation that nothing here accounts for, and four batches held a single sample before
-quarantine. Deploy the app to Streamlit Cloud so a reviewer does not have to install anything.
+quarantine. The app is deployed on Streamlit Cloud (the link is in the README); the next step
+there is a pinned container image, so the reviewer's copy and mine run the same versions.
 Version the issue log with the build that produced it, so two runs can be compared rule by rule
 instead of file by file.

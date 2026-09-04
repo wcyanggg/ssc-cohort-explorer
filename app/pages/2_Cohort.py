@@ -3,8 +3,9 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from common import (GRAY, STATUS_COLORS, SUBTYPE_COLORS, data_ready, footer,
-                    load, page_setup)
+from common import (GRAY, LIGHTGRAY, STATUS_COLORS, SUBTYPE_COLORS, data_ready,
+                    footer, load, page_setup)
+from ssc_coh.stats import prevalence_summary
 
 page_setup("Cohort")
 st.title("Cohort")
@@ -50,8 +51,8 @@ with c3:
 
 # ---------------------------------------------------------------- patterns
 st.markdown("### The patterns that hold across the cohort")
-st.caption("All computed on the cleaned layer; FEV1 excluded (it tracks FVC "
-           "as pure noise and carries no independent signal), sentinel codes "
+st.caption("All computed on the cleaned layer; FEV1 excluded (it tracks FVC and "
+           "adds no usable variation in this dataset), sentinel codes "
            "and default-fills removed.")
 
 p1, p2 = st.columns(2)
@@ -70,8 +71,8 @@ with p1:
     aca_rate = ab[ab["antibody"] == "anti-centromere"].set_index("subtype")["positive"]
     aca_title = "Antibody positivity by subtype"
     if {"lcSSc", "dcSSc"}.issubset(aca_rate.index) and aca_rate["dcSSc"] > 0:
-        aca_title += (" (ACA marks limited disease, "
-                      f"{aca_rate['lcSSc'] / aca_rate['dcSSc']:.0f}×)")
+        aca_title += (" (ACA positivity is "
+                      f"{aca_rate['lcSSc'] / aca_rate['dcSSc']:.0f}× as common in limited disease)")
     fig = px.bar(ab, x="antibody", y="positive", color="subtype",
                  barmode="group", color_discrete_map=SUBTYPE_COLORS)
     fig.update_layout(height=320, margin=dict(l=10, r=10, t=30, b=10),
@@ -97,30 +98,35 @@ with p3:
               "Scl-70 negative": selected["ab_scl70"].eq("negative"),
               "ACA positive": selected["ab_aca"].eq("positive"),
               "ACA negative": selected["ab_aca"].eq("negative")}
-    # dx_ild is three-state, so the rate is shown under both readings of an
-    # unrecorded other_dx: field recorded only, and everyone with missing = no
-    recorded_only = "among patients with a recorded comorbidity field"
-    all_patients = "among all patients, missing read as none"
+    # dx_ild is three-state, so each group gets the complete-case estimate and the
+    # two bounds that read every unrecorded field as no ILD and as ILD
+    complete_case = "complete-case estimate (field recorded)"
+    lower_bound = "lower bound (unrecorded read as no ILD)"
+    upper_bound = "upper bound (unrecorded read as ILD)"
     ild = pd.DataFrame(
-        [{"group": k, "denominator": recorded_only,
-          "ILD recorded": selected.loc[m, "dx_ild"].mean()}
-         for k, m in groups.items() if m.any()]
-        + [{"group": k, "denominator": all_patients,
-            "ILD recorded": selected.loc[m, "dx_ild"].fillna(False).mean()}
-           for k, m in groups.items() if m.any()])
-    fig = px.bar(ild, x="group", y="ILD recorded", color="denominator",
+        [{"group": group_label, "estimate": estimate_label, "ILD recorded": rate}
+         for group_label, group_mask in groups.items() if group_mask.any()
+         for estimate_label, rate in
+         [(complete_case, prevalence_summary(selected.loc[group_mask, "dx_ild"]).complete_case_rate),
+          (lower_bound, prevalence_summary(selected.loc[group_mask, "dx_ild"]).lower_bound),
+          (upper_bound, prevalence_summary(selected.loc[group_mask, "dx_ild"]).upper_bound)]])
+    fig = px.bar(ild, x="group", y="ILD recorded", color="estimate",
                  barmode="group",
-                 color_discrete_map={recorded_only: STATUS_COLORS["positive"],
-                                     all_patients: GRAY})
+                 category_orders={"estimate": [complete_case, lower_bound, upper_bound]},
+                 color_discrete_map={complete_case: STATUS_COLORS["positive"],
+                                     lower_bound: GRAY, upper_bound: LIGHTGRAY})
     fig.update_layout(height=320, margin=dict(l=10, r=10, t=30, b=10),
-                      title="Lung fibrosis follows Scl-70; ACA is protective",
+                      title="Recorded ILD is more common with Scl-70 positivity "
+                            "and less common with ACA positivity",
                       yaxis_tickformat=".0%", xaxis_title="",
-                      legend=dict(orientation="h", y=-0.25, title=""))
+                      legend=dict(orientation="h", y=-0.35, title=""))
     st.plotly_chart(fig, width="stretch")
-    st.caption("`other_dx` is missing for 37% of patients, so each group gets "
-               "two bars: the rate among patients whose comorbidity field was "
-               "recorded, and the rate among all patients with a missing "
-               "field read as none. The true rate lies between the two.")
+    st.caption("`other_dx` is empty for 37% of patients, so each group gets three "
+               "bars. The complete-case estimate divides recorded ILD by the "
+               "patients whose field was filled in. The two bounds read every "
+               "empty field first as no ILD and then as ILD, so the distance "
+               "between them is how far the missing field alone can move the "
+               "rate. It is a sensitivity range, not a confidence interval.")
 with p4:
     lung = selected.melt(id_vars="ssc_subtype", value_vars=["fvc", "dlco_sb"],
                          var_name="measure", value_name="pct").dropna()
@@ -134,10 +140,20 @@ with p4:
                       yaxis_title="% predicted (latest)", legend_title="")
     st.plotly_chart(fig, width="stretch")
 
-n_slope_patients = int(selected["fvc_slope_pct_yr"].notna().sum())
-st.info("Per-patient FVC *slopes* center on zero for both subtypes "
-        f"({n_slope_patients} patients with three or more tests). The dataset "
-        "carries cross-sectional lung differences and no progressive decline. "
-        "This is a negative result and it is reported as such.")
+# the qualifying series are short, so the span they cover is reported with the count
+eligible_slope_ids = selected.loc[selected["fvc_slope_pct_yr"].notna(), "subject_id"]
+fvc_tests = load("pft")
+fvc_dates_by_patient = (fvc_tests[fvc_tests["measure"].eq("FVC")
+                                  & fvc_tests["subject_id"].isin(eligible_slope_ids)]
+                        .groupby("subject_id")["date"])
+follow_up_years = (fvc_dates_by_patient.max() - fvc_dates_by_patient.min()).dt.days / 365.25
+if len(follow_up_years):
+    st.info(f"No cohort-level decline was detected among the {len(follow_up_years)} patients "
+            "who qualify for the exploratory slope analysis (at least three distinct FVC "
+            "measurement dates): their per-patient slopes center on zero in both subtypes. "
+            f"The qualifying series are short, median span {follow_up_years.median():.2f} year "
+            f"and {int((follow_up_years < 1).sum())} of {len(follow_up_years)} under a year, so "
+            "they carry no information about longer follow-up. This is a negative result and it "
+            "is reported as such.")
 
 footer()
